@@ -48,7 +48,7 @@ function rubyParts(surface, reading) {
 }
 
 // ---------- tokenizer + dictionary (in worker.js, off the main thread) ----------
-const worker = new Worker('worker.js');
+const worker = new Worker('worker.js?v=' + (window.APP_VERSION || ''));
 const pending = new Map();
 let reqId = 0;
 worker.onmessage = ({ data }) => {
@@ -57,17 +57,23 @@ worker.onmessage = ({ data }) => {
   pending.delete(data.id);
   if (data.error) { status('⚠ ' + data.error); p.reject(new Error(data.error)); } else p.resolve(data.result);
 };
+let workerError = null;
 worker.onerror = (e) => {
-  status('⚠ worker: ' + (e.message || 'failed to start'));
+  workerError = e.message || 'failed to start';
+  status('⚠ worker: ' + workerError);
   for (const p of pending.values()) p.reject(new Error('worker failed'));
   pending.clear();
 };
 const call = (type, payload) => new Promise((resolve, reject) => {
+  if (workerError) return reject(new Error(workerError));
   const id = ++reqId;
   pending.set(id, { resolve, reject });
   worker.postMessage({ id, type, dicPath: window.KUROMOJI_DICT_OVERRIDE, ...payload });
 });
-const tokenize = (lines) => call('tokenize', { lines });
+const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(what + ' timed out')), ms))]);
+const tokenize = (lines) => withTimeout(call('tokenize', { lines }), 60e3, 'tokenizer');
+// Untokenized fallback so lyrics always show, even before (or without) the tokenizer.
+const plainUnits = (text) => [{ toks: [{ surface_form: text, reading: null }], surface: text, base: text, study: false }];
 const loadDict = () => call('loadDict').catch(() => {});
 const lookup = (unit) => call('lookup', { unit: { toks: unit.toks.slice(0, 1), surface: unit.surface, base: unit.base } });
 const entryReading = (e) => e[1][0];
@@ -278,6 +284,7 @@ async function searchLyrics() {
   st.textContent = 'searching…'; ul.innerHTML = '';
   try {
     const res = await fetch('https://lrclib.net/api/search?q=' + encodeURIComponent(q));
+    if (!res.ok) throw new Error('HTTP ' + res.status);
     const list = await res.json();
     st.textContent = list.length ? `${list.length} results — click one` : 'nothing found — try fewer words, or paste lyrics';
     list.sort((a, b) => !!b.syncedLyrics - !!a.syncedLyrics);
@@ -292,7 +299,10 @@ async function searchLyrics() {
       };
       ul.appendChild(li);
     }
-  } catch (e) { st.textContent = '⚠ search failed: ' + e.message; }
+  } catch (e) {
+    st.innerHTML = `⚠ couldn't reach LRCLIB (${esc(e.message)}). An ad/tracker blocker may be blocking lrclib.net — ` +
+      `or <a href="https://lrclib.net/search/${encodeURIComponent(q)}" target="_blank" rel="noopener">search there</a> and paste the lyrics below.`;
+  }
 }
 $('#btnSearchLyrics').onclick = searchLyrics;
 $('#btnSaveSong').onclick = () => {
@@ -328,16 +338,22 @@ async function openSong(id) {
   $('#songBar').innerHTML = `<div><b>${esc(song.title || '(untitled)')}</b> <span class="muted small">UP ${esc(song.artist || '—')}</span></div>
     <div class="row">${sanlianHtml(song)}<button data-sl="all" class="sanlian-all" title="一键三连">一键三连</button></div>`;
   $('#danmaku').innerHTML = '';
-  $('#lyrics').innerHTML = '<p class="muted">Loading lyrics…</p>';
   ensureVideo(song.videoId);
-  const lineUnits = await tokenize(song.lines.map((l) => l.text)).catch(() => null);
-  if (!lineUnits || currentSong !== song) return;
-  units = lineUnits;
-  loadDict(); // warm up for the first tap
+  // show plain lyrics right away; furigana and tap-to-lookup arrive when the tokenizer is ready
+  units = song.lines.map((l) => plainUnits(l.text));
   curLine = -1; loopLine = null;
   $('#btnLoop').classList.remove('on');
   renderLyrics();
   if (song.lines.some((l) => l.t == null)) startSync();
+  status('辞書 adding furigana…');
+  let lineUnits;
+  try { lineUnits = await tokenize(song.lines.map((l) => l.text)); }
+  catch (e) { status('⚠ furigana unavailable (' + e.message + ') — reload to retry'); return; }
+  if (currentSong !== song) return;
+  status('');
+  units = lineUnits;
+  renderLyrics(); highlight(curLine);
+  loadDict(); // warm up for the first tap
 }
 const lineStart = (i) => currentSong.lines[i].t + (currentSong.offset || 0);
 function lineEnd(i) {
@@ -390,7 +406,6 @@ $('#lyrics').addEventListener('click', (e) => {
 });
 
 function tick() {
-  requestAnimationFrame(tick);
   if (!ytReady) return;
   const t = now();
   // review clip playback
@@ -459,7 +474,7 @@ function highlight(i) {
   const el = $(`.line[data-l="${i}"]`);
   if (el && $('#sheet').classList.contains('hidden')) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
-requestAnimationFrame(tick);
+setInterval(tick, 50);
 
 function seekLine(i) {
   if (loopLine != null) loopLine = i;
@@ -641,7 +656,7 @@ async function startReview() {
   $('#rvGrades').classList.add('hidden');
   $('#rvShowRow').classList.remove('hidden');
   const card = rvCard;
-  [rvUnits] = await tokenize([card.text]);
+  [rvUnits] = await tokenize([card.text]).catch(() => [plainUnits(card.text)]);
   if (rvCard !== card) return;
   rvTarget = rvUnits.findIndex((u) => u.surface === rvCard.surface);
   if (rvTarget < 0) rvTarget = rvUnits.findIndex((u) => u.base === rvCard.word);

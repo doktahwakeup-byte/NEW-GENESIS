@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>歌で覚える — Karaoke Study</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
 <header class="top">
@@ -12,7 +12,7 @@
   <button class="tab" data-view="player" id="tabPlayer" disabled>♪ Sing</button>
   <button class="tab" data-view="review">復習 Review <span id="dueCount" class="badge"></span></button>
   <button class="tab" data-view="deck">単語 Deck</button>
-  <span id="status" class="status"></span>
+  <span id="status" class="status"></span><span class="ver muted small">v4</span>
 </header>
 
 <div id="playerWrap" class="player-wrap hidden">
@@ -160,6 +160,7 @@
   </div>
 </div>
 
-<script src="app.js"></script>
+<script>window.APP_VERSION = "4"; /* bump on every release so browsers never mix old and new files */</script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

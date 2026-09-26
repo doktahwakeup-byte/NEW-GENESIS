@@ -155,3 +155,5 @@ table.deck td.w { font-size: 1.2em; white-space: nowrap; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chips span { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 2px 8px; cursor: pointer; }
 .chips span:hover { text-decoration: line-through; }
+
+.ver { margin-left: 8px; }
