@@ -16,7 +16,7 @@
 </header>
 
 <div id="playerWrap" class="player-wrap hidden">
-  <div class="yt-box"><div id="yt"></div></div>
+  <div class="yt-box"><div id="yt"></div><div id="danmaku" class="danmaku paused"></div></div>
 </div>
 
 <main>
@@ -55,6 +55,7 @@
 
   <!-- PLAYER -->
   <section id="view-player" class="view hidden">
+    <div id="songBar" class="song-bar"></div>
     <div class="controls">
       <div class="ctl-group">
         <button id="btnPlay" title="Play/Pause (Space)">▶</button>
@@ -63,6 +64,7 @@
         <button id="btnLoop" class="toggle" title="Loop current line (L)">🔁 Loop</button>
         <button id="btnShadow" class="toggle" title="Pause after each line so you can sing it back (S)">🎤 Shadow</button>
         <button id="btnCloze" class="toggle" title="Blank out saved words (C)">▢ Cloze</button>
+        <button id="btnDanmaku" class="toggle" title="Saved words fly across the video (D)">弹 Danmaku</button>
       </div>
       <div class="ctl-group">
         <label class="inline">Speed
@@ -158,7 +160,6 @@
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/build/kuromoji.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

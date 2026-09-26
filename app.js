@@ -1,7 +1,6 @@
 'use strict';
 // 歌で覚える — karaoke study tool. Single page, no build step, data in localStorage.
 
-const KUROMOJI_DICT = 'https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/dict/';
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -16,11 +15,11 @@ const S = {
   songs: store.get('songs', []),
   cards: store.get('cards', []),
   known: new Set(store.get('known', [])),
-  settings: Object.assign({ furi: 'smart', kanjiLvl: 3, rate: 1 }, store.get('settings', {})),
+  settings: Object.assign({ furi: 'smart', kanjiLvl: 3, rate: 1, danmaku: true }, store.get('settings', {})),
 };
 const save = {
   songs: () => store.set('songs', S.songs),
-  cards: () => store.set('cards', S.cards),
+  cards: () => { matureCache = null; store.set('cards', S.cards); },
   known: () => store.set('known', [...S.known]),
   settings: () => store.set('settings', S.settings),
 };
@@ -48,84 +47,29 @@ function rubyParts(surface, reading) {
   return runs.map((r) => r.k ? { t: r.t, r: m[g++] } : { t: r.t });
 }
 
-// ---------- tokenizer ----------
-let tokenizer = null;
-const tokenizerReady = new Promise((resolve) => {
-  const start = () => {
-    if (!window.kuromoji) { status('⚠ tokenizer failed to load'); return; }
-    status('辞書 loading tokenizer…');
-    kuromoji.builder({ dicPath: window.KUROMOJI_DICT_OVERRIDE || KUROMOJI_DICT }).build((err, t) => {
-      if (err) { status('⚠ tokenizer: ' + err); return; }
-      tokenizer = t; status(''); resolve(t);
-    });
-  };
-  if (document.readyState === 'complete') start(); else window.addEventListener('load', start);
+// ---------- tokenizer + dictionary (in worker.js, off the main thread) ----------
+const worker = new Worker('worker.js');
+const pending = new Map();
+let reqId = 0;
+worker.onmessage = ({ data }) => {
+  if ('status' in data) return status(data.status);
+  const p = pending.get(data.id);
+  pending.delete(data.id);
+  if (data.error) { status('⚠ ' + data.error); p.reject(new Error(data.error)); } else p.resolve(data.result);
+};
+worker.onerror = (e) => {
+  status('⚠ worker: ' + (e.message || 'failed to start'));
+  for (const p of pending.values()) p.reject(new Error('worker failed'));
+  pending.clear();
+};
+const call = (type, payload) => new Promise((resolve, reject) => {
+  const id = ++reqId;
+  pending.set(id, { resolve, reject });
+  worker.postMessage({ id, type, dicPath: window.KUROMOJI_DICT_OVERRIDE, ...payload });
 });
-
-// Group kuromoji tokens into study units: verb/adjective + its auxiliaries (泣い+て+た → 泣いてた ← 泣く).
-function toUnits(text) {
-  const toks = tokenizer.tokenize(text);
-  const units = [];
-  for (const t of toks) {
-    const prev = units[units.length - 1];
-    const inflecting = prev && (['動詞', '形容詞'].includes(prev.head.pos) || (prev.head.pos === '名詞' && prev.head.pos_detail_1 === '形容動詞語幹' && t.pos === '助動詞'));
-    const attach = inflecting && (
-      t.pos === '助動詞' ||
-      (t.pos === '助詞' && t.pos_detail_1 === '接続助詞' && /^(て|で|ちゃ|じゃ)$/.test(t.surface_form)) ||
-      (t.pos === '動詞' && ['非自立', '接尾'].includes(t.pos_detail_1)) ||
-      (t.pos === '形容詞' && t.pos_detail_1 === '非自立') ||
-      (t.pos === '名詞' && t.pos_detail_1 === '非自立' && /^(ん|の)$/.test(t.surface_form)) // 思い出すんだ
-    );
-    if (attach) { prev.toks.push(t); prev.surface += t.surface_form; continue; }
-    units.push({ toks: [t], head: t, surface: t.surface_form });
-  }
-  for (const u of units) {
-    const h = u.head;
-    u.base = h.basic_form && h.basic_form !== '*' ? h.basic_form : h.surface_form;
-    u.study = !['記号', '助詞', '助動詞'].includes(h.pos) && /[぀-ヿ㐀-鿿]/.test(u.surface);
-  }
-  return units;
-}
-
-// ---------- dictionary ----------
-let DICT = null, DINDEX = null, dictLoading = null;
-function loadDict() {
-  if (dictLoading) return dictLoading;
-  dictLoading = (async () => {
-    status('辞書 loading dictionary…');
-    const res = await fetch('data/dict.json.gz');
-    const buf = new Uint8Array(await res.arrayBuffer());
-    let text;
-    if (buf[0] === 0x1f && buf[1] === 0x8b) {
-      const ds = new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'));
-      text = await new Response(ds).text();
-    } else text = new TextDecoder().decode(buf); // server already decoded it
-    DICT = JSON.parse(text);
-    DINDEX = new Map();
-    const add = (k, i) => { const a = DINDEX.get(k); if (a) a.push(i); else DINDEX.set(k, [i]); };
-    DICT.forEach((e, i) => { e[0].forEach((k) => add(k, i)); e[1].forEach((k) => add(k, i)); });
-    status('');
-  })().catch((e) => { status('⚠ dictionary: ' + e.message); dictLoading = null; });
-  return dictLoading;
-}
-function lookup(unit) {
-  if (!DINDEX) return [];
-  const h = unit.head;
-  const reading = kataToHira(h.reading);
-  const keys = [unit.base, h.surface_form, unit.surface, kataToHira(unit.base)];
-  const seen = new Set(), out = [];
-  for (const k of keys) for (const i of DINDEX.get(k) || []) if (!seen.has(i)) { seen.add(i); out.push(i); }
-  const baseReading = kataToHira(unit.base) === unit.base ? unit.base : null;
-  return out.map((i) => {
-    const [kj, kn, score] = DICT[i];
-    let s = score;
-    if (kj.includes(unit.base)) s += 50;
-    if (hasKanji(unit.surface) && !kj.length) s -= 40;
-    if (reading && kn.some((r) => reading.startsWith(r.slice(0, Math.max(1, r.length - 1))))) s += 15;
-    if (baseReading && kn[0] === baseReading) s += 10;
-    return { i, s };
-  }).sort((a, b) => b.s - a.s).slice(0, 4).map((x) => DICT[x.i]);
-}
+const tokenize = (lines) => call('tokenize', { lines });
+const loadDict = () => call('loadDict').catch(() => {});
+const lookup = (unit) => call('lookup', { unit: { toks: unit.toks.slice(0, 1), surface: unit.surface, base: unit.base } });
 const entryReading = (e) => e[1][0];
 const entryWord = (e, unit) => (e[0].includes(unit.base) ? unit.base : e[0][0]) || e[1][0];
 const shortGloss = (e) => e[3].slice(0, 2).map((s) => s[1].split('; ').slice(0, 2).join(', ')).join('; ');
@@ -160,7 +104,8 @@ function fmtIvl(ms) {
 const dueCards = () => S.cards.filter((c) => c.due <= Date.now()).sort((a, b) => a.due - b.due);
 const cardKey = (w, r) => w + '|' + r;
 const savedWords = () => new Set(S.cards.map((c) => c.word));
-const matureWords = () => new Set(S.cards.filter((c) => c.state === 'review' && c.ivl >= 21).map((c) => c.word));
+let matureCache = null;
+const matureWords = () => matureCache || (matureCache = new Set(S.cards.filter((c) => c.state === 'review' && c.ivl >= 21).map((c) => c.word)));
 function refreshDue() { const n = dueCards().length; $('#dueCount').textContent = n || ''; }
 
 // ---------- lyrics parsing ----------
@@ -220,6 +165,7 @@ const playing = () => ytReady && yt.getPlayerState && yt.getPlayerState() === 1;
 let titleWaiter = null;
 function onYtState(e) {
   $('#btnPlay').textContent = e.data === 1 ? '⏸' : '▶';
+  $('#danmaku').classList.toggle('paused', e.data !== 1);
   if (titleWaiter && yt.getVideoData) {
     const t = yt.getVideoData().title;
     if (t) { titleWaiter(t); titleWaiter = null; }
@@ -248,17 +194,44 @@ $$('.tab').forEach((b) => b.addEventListener('click', () => {
 
 // ---------- library ----------
 let editingSong = null;
+// 三连: 👍 like, 🪙 coins (max 2, like Bilibili), ⭐ favourite. Favourites and well-coined songs sort first.
+const songScore = (s) => (s.fav ? 100 : 0) + (s.coins || 0) * 10 + (s.like ? 5 : 0);
+const sanlianHtml = (s) => `<span class="sanlian">
+  <button data-sl="like" class="${s.like ? 'on' : ''}" title="Like">👍<span>${s.like ? 1 : 0}</span></button>
+  <button data-sl="coin" class="${s.coins ? 'on' : ''}" title="Coin (max 2)">🪙<span>${s.coins || 0}</span></button>
+  <button data-sl="fav" class="${s.fav ? 'on' : ''}" title="Favourite">⭐<span>${s.fav ? 1 : 0}</span></button></span>`;
+function sanlian(song, what, box) {
+  if (what === 'like') song.like = !song.like;
+  if (what === 'coin') song.coins = ((song.coins || 0) + 1) % 3;
+  if (what === 'fav') song.fav = !song.fav;
+  if (what === 'all') { const done = song.like && song.coins === 2 && song.fav; song.like = song.fav = !done; song.coins = done ? 0 : 2; }
+  save.songs();
+  box.outerHTML = sanlianHtml(song);
+}
+function bindSanlian(root, song) {
+  root.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-sl]');
+    if (!b) return;
+    e.stopPropagation();
+    sanlian(song, b.dataset.sl, b.closest('.sanlian'));
+    if (b.dataset.sl === 'all') b.classList.add('pop');
+  });
+}
 function renderLibrary() {
   const ul = $('#songList');
   ul.innerHTML = '';
   $('#emptyLib').classList.toggle('hidden', S.songs.length > 0);
-  for (const s of S.songs) {
+  for (const s of S.songs.slice().sort((a, b) => songScore(b) - songScore(a))) {
     const n = S.cards.filter((c) => c.songId === s.id).length;
     const li = document.createElement('li');
-    li.innerHTML = `<span class="t"><b>${esc(s.title || '(untitled)')}</b><span class="muted small">${esc(s.artist || '')} · ${s.lines.length} lines · ${n} cards${s.lines.some((l) => l.t == null) ? ' · ⏱ needs sync' : ''}</span></span>
-      <button data-a="open" class="primary">♪ Sing</button><button data-a="del" title="Delete">🗑</button>`;
+    li.innerHTML = `<div class="thumb" style="background-image:url('https://i.ytimg.com/vi/${esc(s.videoId)}/mqdefault.jpg')">
+        <span class="stat">▶ ${s.lines.length}行 · ★ ${n}</span>${s.lines.some((l) => l.t == null) ? '<span class="tag">⏱ 待同步</span>' : ''}</div>
+      <div class="meta"><b class="t">${esc(s.title || '(untitled)')}</b>
+        <span class="muted small">UP ${esc(s.artist || '—')}</span>
+        <div class="row">${sanlianHtml(s)}<button data-a="del" class="ghost" title="Delete">🗑</button></div></div>`;
+    li.querySelector('.thumb').onclick = () => openSong(s.id);
     li.querySelector('.t').onclick = () => openSong(s.id);
-    li.querySelector('[data-a=open]').onclick = () => openSong(s.id);
+    bindSanlian(li, s);
     li.querySelector('[data-a=del]').onclick = () => {
       if (!confirm(`Delete "${s.title}"? Its cards stay in your deck.`)) return;
       S.songs = S.songs.filter((x) => x !== s); save.songs(); renderLibrary();
@@ -352,11 +325,15 @@ async function openSong(id) {
   $('#tabPlayer').disabled = false;
   show('player');
   $('#offsetVal').textContent = (song.offset || 0).toFixed(2) + 's';
-  $('#lyrics').innerHTML = '<p class="muted">Loading tokenizer…</p>';
+  $('#songBar').innerHTML = `<div><b>${esc(song.title || '(untitled)')}</b> <span class="muted small">UP ${esc(song.artist || '—')}</span></div>
+    <div class="row">${sanlianHtml(song)}<button data-sl="all" class="sanlian-all" title="一键三连">一键三连</button></div>`;
+  $('#danmaku').innerHTML = '';
+  $('#lyrics').innerHTML = '<p class="muted">Loading lyrics…</p>';
   ensureVideo(song.videoId);
-  loadDict();
-  await tokenizerReady;
-  units = song.lines.map((l) => toUnits(l.text));
+  const lineUnits = await tokenize(song.lines.map((l) => l.text)).catch(() => null);
+  if (!lineUnits || currentSong !== song) return;
+  units = lineUnits;
+  loadDict(); // warm up for the first tap
   curLine = -1; loopLine = null;
   $('#btnLoop').classList.remove('on');
   renderLyrics();
@@ -444,7 +421,34 @@ function tick() {
     yt.seekTo(lineEnd(finished), true);
   }
   playedThrough = natural ? i : null;
+  if (natural && playing()) spawnDanmaku(i);
   curLine = i; highlight(i);
+}
+// 弹幕: saved words (from any song) fly across the video when a line containing them starts.
+const LANES = 4;
+let laneFree = new Array(LANES).fill(0);
+function spawnDanmaku(i) {
+  if (!S.settings.danmaku || !units[i]) return;
+  const box = $('#danmaku');
+  const byWord = new Map(S.cards.map((c) => [c.word, c]));
+  const seen = new Set();
+  for (const u of units[i]) {
+    const c = u.study && byWord.get(u.base);
+    if (!c || seen.has(c.word)) continue;
+    seen.add(c.word);
+    const now = Date.now();
+    let lane = laneFree.findIndex((t) => t <= now);
+    if (lane < 0) lane = laneFree.indexOf(Math.min(...laneFree));
+    const dur = 8 / (S.settings.rate || 1);
+    laneFree[lane] = now + dur * 350; // next comment may enter once this one has cleared the right edge
+    const el = document.createElement('span');
+    el.className = 'dm' + (c.state === 'review' && c.ivl >= 21 ? '' : c.state === 'review' ? ' blue' : ' pink');
+    el.textContent = `${c.word}【${c.reading}】${(c.gloss || '').split(/[;,]/)[0]}`;
+    el.style.top = (lane * 22 + 6) + 'px';
+    el.style.animationDuration = dur + 's';
+    el.addEventListener('animationend', () => el.remove());
+    box.appendChild(el);
+  }
 }
 function highlight(i) {
   $$('.line').forEach((el) => {
@@ -479,7 +483,22 @@ function toggleLoop() {
   $('#btnLoop').classList.toggle('on', loopLine != null);
 }
 function toggleShadow() { shadow = !shadow; $('#btnShadow').classList.toggle('on', shadow); if (!shadow) { shadowResumeAt = null; $('#shadowHint').classList.add('hidden'); } }
+function toggleDanmaku() {
+  S.settings.danmaku = !S.settings.danmaku; save.settings();
+  $('#btnDanmaku').classList.toggle('on', S.settings.danmaku);
+  if (!S.settings.danmaku) $('#danmaku').innerHTML = '';
+}
+$('#btnDanmaku').onclick = toggleDanmaku;
+$('#btnDanmaku').classList.toggle('on', S.settings.danmaku);
 function toggleCloze() { cloze = !cloze; $('#btnCloze').classList.toggle('on', cloze); renderLyrics(); highlight(curLine); }
+$('#songBar').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-sl]');
+  if (!b || !currentSong) return;
+  if (b.dataset.sl === 'all') {
+    sanlian(currentSong, 'all', $('#songBar .sanlian'));
+    b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop');
+  } else sanlian(currentSong, b.dataset.sl, b.closest('.sanlian'));
+});
 $('#btnLoop').onclick = toggleLoop;
 $('#btnShadow').onclick = toggleShadow;
 $('#btnCloze').onclick = toggleCloze;
@@ -547,9 +566,9 @@ async function openSheet(li, ui, song = currentSong, lineUnits = units[li]) {
   const furi = u.toks.map((t) => rubyParts(t.surface_form, t.reading).map((p) => p.r ? `<ruby>${esc(p.t)}<rt>${esc(p.r)}</rt></ruby>` : esc(p.t)).join('')).join('');
   $('#sheetHead').innerHTML = furi + conj;
   $('#sheetEntries').innerHTML = '<p class="muted">Loading dictionary…</p>';
-  await loadDict();
+  const entries = await lookup(u).catch(() => []);
   if (!sheetCtx || sheetCtx.u !== u) return;
-  sheetCtx.entries = lookup(u);
+  sheetCtx.entries = entries;
   renderSheetEntries();
 }
 function renderSheetEntries() {
@@ -574,7 +593,7 @@ $('#sheetSave').onclick = () => {
   const { entries, sel, u, song, li } = sheetCtx;
   const e = entries[sel];
   const word = e ? entryWord(e, u) : u.base;
-  const reading = e ? entryReading(e) : kataToHira(u.head.reading);
+  const reading = e ? entryReading(e) : kataToHira(u.toks[0].reading);
   const ov = song.overrides && song.overrides[li + ':' + sheetCtx.ui];
   S.cards.push({
     id: uid(), word, reading, surface: u.surface, sung: ov || null,
@@ -621,8 +640,9 @@ async function startReview() {
   $('#rvBack').classList.add('hidden');
   $('#rvGrades').classList.add('hidden');
   $('#rvShowRow').classList.remove('hidden');
-  await tokenizerReady;
-  rvUnits = toUnits(rvCard.text);
+  const card = rvCard;
+  [rvUnits] = await tokenize([card.text]);
+  if (rvCard !== card) return;
   rvTarget = rvUnits.findIndex((u) => u.surface === rvCard.surface);
   if (rvTarget < 0) rvTarget = rvUnits.findIndex((u) => u.base === rvCard.word);
   $('#rvSentence').innerHTML = rvUnits.map((u, j) => j === rvTarget
@@ -720,6 +740,7 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'l') return toggleLoop();
     if (e.key === 's') return toggleShadow();
     if (e.key === 'c') return toggleCloze();
+    if (e.key === 'd') return toggleDanmaku();
   }
   if (view === 'review' && rvCard) {
     if (e.code === 'Space') { e.preventDefault(); return $('#rvGrades').classList.contains('hidden') ? showAnswer() : grade(2); }

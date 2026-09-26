@@ -21,14 +21,16 @@ For phone use, turn on GitHub Pages for this repo and open `/karaoke/`.
    - Tap a **word** → dictionary sheet (conjugated form ← dictionary form). **★ Save card**, **✓ Mark known**, or **✎ Sung reading** (e.g. 運命 → さだめ).
    - Tap a **timestamp** or empty part of a line → jump there.
    - **🔁 Loop** repeats the current line. **🎤 Shadow** pauses after each line so you can sing it back. **▢ Cloze** blanks your saved words (tap to reveal).
+   - **弹 Danmaku**: words you've saved (from any song) fly across the video as bullet comments when a line containing them starts. Pink = new, blue = learning, white = mature.
+   - **一键三连** / 👍 🪙 ⭐: rate songs; favourites and coined songs sort to the top of the library.
    - **Speed** 0.5–1× (YouTube keeps the pitch). **Sync −/＋** fixes lyrics that run early or late (MVs often have intros the audio release doesn't).
    - **⏱ Tap-sync**: for plain-text lyrics, play the song and press Space (or TAP) as each line starts.
 3. **復習 Review** — due cards show the lyric line with the word highlighted and play that line's audio. Grade with Again/Hard/Good/Easy (keys 1–4; Space = show/Good; R = replay).
 4. **単語 Deck** — browse and delete cards, manage known words, and choose which kanji levels hide furigana in *Smart* mode (default: N4 and below). Words you mark known or whose cards reach 21+ days also lose their furigana. **Export/Import backup** — data lives in this browser's localStorage, so back it up.
 
-Keys in Sing view: Space play/pause, ←/→ previous/next line, L loop, S shadow, C cloze, Esc close popup.
+Keys in Sing view: Space play/pause, ←/→ previous/next line, L loop, S shadow, C cloze, D danmaku, Esc close popup.
 
 ## Data
 
-- `data/dict.json.gz` — built from [JMdict](https://www.edrdg.org/jmdict/j_jmdict.html) and `data/kanji.json` from KANJIDIC2 (old JLPT levels), both © EDRDG, CC BY-SA 4.0. Rebuild with `tools/build_dict.py` (instructions inside).
-- Tokenizer: [kuromoji.js](https://github.com/takuyaa/kuromoji.js) loaded from jsDelivr.
+- `data/dict.tsv.gz` — built from [JMdict](https://www.edrdg.org/jmdict/j_jmdict.html) and `data/kanji.json` from KANJIDIC2 (old JLPT levels), both © EDRDG, CC BY-SA 4.0. Rebuild with `tools/build_dict.py` (instructions inside).
+- Tokenizer: [kuromoji.js](https://github.com/takuyaa/kuromoji.js) loaded from jsDelivr. Tokenizing and dictionary lookups run in `worker.js` so the page never freezes.

@@ -1,4 +1,4 @@
-"""Build karaoke/data/dict.json.gz and kanji.json from the jamdict-data SQLite DB.
+"""Build karaoke/data/dict.tsv.gz and kanji.json from the jamdict-data SQLite DB.
 
     pip download --no-deps jamdict-data && tar xzf jamdict_data-*.tar.gz
     xz -dk jamdict_data-*/jamdict_data/jamdict.db.xz
@@ -58,8 +58,14 @@ for idseq, in db.execute('select idseq from Entry order by idseq'):
         continue
     entries.append([kanji[idseq][:4], kana[idseq][:3], score(kjp[idseq] + knp[idseq]), ss])
 
-with gzip.open(os.path.join(out, 'dict.json.gz'), 'wt', encoding='utf-8', compresslevel=9) as f:
-    json.dump(entries, f, ensure_ascii=False, separators=(',', ':'))
+# One entry per line: kanji|kanji <TAB> kana|kana <TAB> score <TAB> pos\x1fgloss\x1epos\x1fgloss...
+# The app only parses a line when it is looked up, which keeps memory low.
+def clean(s):
+    return s.replace('\t', ' ').replace('\n', ' ').replace('|', '/')
+with gzip.open(os.path.join(out, 'dict.tsv.gz'), 'wt', encoding='utf-8', compresslevel=9) as f:
+    for kj, kn, sc, ss in entries:
+        f.write('\t'.join(['|'.join(map(clean, kj)), '|'.join(map(clean, kn)), str(sc),
+                           '\x1e'.join(clean(p) + '\x1f' + clean(g) for p, g in ss)]) + '\n')
 
 # Old JLPT levels: 4 ~ N5, 3 ~ N4, 2 ~ N3/N2
 lv = {}
