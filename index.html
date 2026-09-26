@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>歌で覚える — Karaoke Study</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <button class="tab" data-view="library">曲 Songs</button>
+  <button class="tab" data-view="player" id="tabPlayer" disabled>♪ Sing</button>
+  <button class="tab" data-view="review">復習 Review <span id="dueCount" class="badge"></span></button>
+  <button class="tab" data-view="deck">単語 Deck</button>
+  <span id="status" class="status"></span>
+</header>
+
+<div id="playerWrap" class="player-wrap hidden">
+  <div class="yt-box"><div id="yt"></div></div>
+</div>
+
+<main>
+  <!-- LIBRARY -->
+  <section id="view-library" class="view">
+    <div class="row">
+      <h2>Songs</h2>
+      <button id="btnAddSong" class="primary">＋ Add song</button>
+    </div>
+    <ul id="songList" class="song-list"></ul>
+    <p id="emptyLib" class="muted">No songs yet. Add a YouTube link to start.</p>
+
+    <div id="addSong" class="card hidden">
+      <h3 id="addSongTitle">Add song</h3>
+      <label>YouTube link
+        <input id="inUrl" type="url" placeholder="https://www.youtube.com/watch?v=...">
+      </label>
+      <div class="grid2">
+        <label>Title <input id="inTitle"></label>
+        <label>Artist <input id="inArtist"></label>
+      </div>
+      <div class="row">
+        <button id="btnSearchLyrics">🔍 Find synced lyrics (LRCLIB)</button>
+        <span id="lyricsSearchStatus" class="muted"></span>
+      </div>
+      <ul id="lyricsResults" class="results"></ul>
+      <label>Lyrics — paste LRC (<code>[01:23.45]歌詞</code>) or plain text (you can tap-sync plain text afterwards)
+        <textarea id="inLyrics" rows="12" spellcheck="false"></textarea>
+      </label>
+      <div class="row">
+        <button id="btnSaveSong" class="primary">Save</button>
+        <button id="btnCancelSong">Cancel</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- PLAYER -->
+  <section id="view-player" class="view hidden">
+    <div class="controls">
+      <div class="ctl-group">
+        <button id="btnPlay" title="Play/Pause (Space)">▶</button>
+        <button id="btnPrev" title="Previous line (←)">⏮</button>
+        <button id="btnNext" title="Next line (→)">⏭</button>
+        <button id="btnLoop" class="toggle" title="Loop current line (L)">🔁 Loop</button>
+        <button id="btnShadow" class="toggle" title="Pause after each line so you can sing it back (S)">🎤 Shadow</button>
+        <button id="btnCloze" class="toggle" title="Blank out saved words (C)">▢ Cloze</button>
+      </div>
+      <div class="ctl-group">
+        <label class="inline">Speed
+          <select id="selRate">
+            <option value="0.5">0.5×</option><option value="0.75">0.75×</option>
+            <option value="0.85">0.85×</option><option value="1" selected>1×</option>
+          </select>
+        </label>
+        <label class="inline">Furigana
+          <select id="selFuri">
+            <option value="smart">Smart</option><option value="all">All</option><option value="off">Off</option>
+          </select>
+        </label>
+        <span class="inline">Sync
+          <button id="btnOffMinus" title="Lyrics appear earlier">−</button>
+          <span id="offsetVal">0.0s</span>
+          <button id="btnOffPlus" title="Lyrics appear later">＋</button>
+        </span>
+        <button id="btnTapSync" title="Re-time the lyrics by tapping each line">⏱ Tap-sync</button>
+        <button id="btnEditSong">✎ Edit</button>
+      </div>
+    </div>
+    <div id="syncBar" class="sync-bar hidden">
+      <b>Tap-sync:</b> play the song and press <kbd>Space</kbd> / tap <button id="btnSyncTap" class="primary">TAP</button> as each highlighted line starts.
+      <button id="btnSyncUndo">Undo</button> <button id="btnSyncDone">Done</button>
+    </div>
+    <div id="shadowHint" class="shadow-hint hidden">🎤 Your turn — sing it!</div>
+    <div id="lyrics" class="lyrics"></div>
+  </section>
+
+  <!-- REVIEW -->
+  <section id="view-review" class="view hidden">
+    <div id="reviewEmpty" class="card center">
+      <h2>お疲れ様！</h2>
+      <p class="muted" id="reviewEmptyMsg">Nothing due right now.</p>
+    </div>
+    <div id="reviewCard" class="card review hidden">
+      <div class="muted small" id="rvSource"></div>
+      <div id="rvSentence" class="rv-sentence"></div>
+      <div class="row center">
+        <button id="rvPlay">▶ Play line</button>
+        <button id="rvSlow">🐢 0.75×</button>
+      </div>
+      <div id="rvBack" class="rv-back hidden"></div>
+      <div class="row center" id="rvShowRow"><button id="rvShow" class="primary big">Show answer (Space)</button></div>
+      <div class="row center grades hidden" id="rvGrades">
+        <button data-g="0" class="g-again">Again<small></small></button>
+        <button data-g="1" class="g-hard">Hard<small></small></button>
+        <button data-g="2" class="g-good">Good<small></small></button>
+        <button data-g="3" class="g-easy">Easy<small></small></button>
+      </div>
+    </div>
+  </section>
+
+  <!-- DECK -->
+  <section id="view-deck" class="view hidden">
+    <div class="row">
+      <h2>Deck</h2>
+      <span id="deckStats" class="muted"></span>
+    </div>
+    <div class="row">
+      <label class="inline">Hide furigana on kanji up to
+        <select id="selKanjiLvl">
+          <option value="0">— (never)</option>
+          <option value="4">N5</option>
+          <option value="3">N4</option>
+          <option value="2">N3/N2</option>
+        </select>
+      </label>
+      <button id="btnExport">⬇ Export backup</button>
+      <label class="button">⬆ Import backup<input id="inImport" type="file" accept=".json" hidden></label>
+    </div>
+    <table class="deck">
+      <thead><tr><th>Word</th><th>Meaning</th><th>Song</th><th>Due</th><th></th></tr></thead>
+      <tbody id="deckBody"></tbody>
+    </table>
+    <h3>Known words <span class="muted small">(furigana hidden in Smart mode)</span></h3>
+    <div id="knownList" class="chips"></div>
+  </section>
+</main>
+
+<!-- WORD POPUP -->
+<div id="sheet" class="sheet hidden">
+  <div class="sheet-inner">
+    <button class="close" id="sheetClose">✕</button>
+    <div id="sheetHead" class="sheet-head"></div>
+    <div id="sheetEntries" class="entries"></div>
+    <div class="row">
+      <button id="sheetSave" class="primary">★ Save card</button>
+      <button id="sheetKnown">✓ Known</button>
+      <button id="sheetReading">✎ Sung reading</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/kuromoji@0.1.2/build/kuromoji.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
